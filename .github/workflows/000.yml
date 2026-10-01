@@ -1,0 +1,393 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
+
+      - name: Generate project files
+        run: |
+          mkdir -p app/src/main/java/com/hastyar/freezetranslate
+          mkdir -p app/src/main/res/xml
+          mkdir -p app/src/main/res/values
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "SimpleFreeze"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx3g
+          android.useAndroidX=true
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.hastyar.freezetranslate"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.hastyar.freezetranslate"
+                  minSdk = 33
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          EOF
+
+          cat > app/src/main/res/values/strings.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="accessibility_desc">سڕکەری شاشە بۆ کاک هەستیار</string>
+          </resources>
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="Freeze Hastyar"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".FreezeService"
+                      android:exported="true"
+                      android:label="سڕکەری شاشە (Hastyar)"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/xml/accessibility_config.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:canTakeScreenshot="true"
+              android:notificationTimeout="100"
+              android:description="@string/accessibility_desc" />
+          EOF
+
+          cat > app/src/main/java/com/hastyar/freezetranslate/MainActivity.kt <<'EOF'
+          package com.hastyar.freezetranslate
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import android.view.View
+
+          class MainActivity : Activity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val layout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutDirection = View.LAYOUT_DIRECTION_RTL
+                      setPadding(50, 100, 50, 50)
+                  }
+
+                  val title = TextView(this).apply {
+                      text = "بەخێربێیت کاکە هەستیار!\n\nبۆ کارپێکردن، ئەم دووانە هەڵبکە:"
+                      textSize = 20f
+                      setPadding(0, 0, 0, 50)
+                  }
+                  layout.addView(title)
+
+                  val btnOverlay = Button(this).apply {
+                      text = "١. مۆڵەتی دەرکەوتن لەسەر شاشە"
+                      setOnClickListener {
+                          startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                      }
+                  }
+                  layout.addView(btnOverlay)
+
+                  val btnService = Button(this).apply {
+                      text = "٢. هەڵکردنی سڕکەری شاشە (Accessibility)"
+                      setOnClickListener {
+                          startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                      }
+                  }
+                  layout.addView(btnService)
+
+                  setContentView(layout)
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/hastyar/freezetranslate/FreezeService.kt <<'EOF'
+          package com.hastyar.freezetranslate
+
+          import android.accessibilityservice.AccessibilityService
+          import android.content.Context
+          import android.graphics.Bitmap
+          import android.graphics.Color
+          import android.graphics.ColorSpace
+          import android.graphics.PixelFormat
+          import android.graphics.drawable.GradientDrawable
+          import android.hardware.HardwareBuffer
+          import android.os.Handler
+          import android.os.Looper
+          import android.view.Display
+          import android.view.Gravity
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.WindowManager
+          import android.view.accessibility.AccessibilityEvent
+          import android.widget.ImageView
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import android.widget.Toast
+          import java.util.concurrent.Executor
+
+          class FreezeService : AccessibilityService() {
+
+              private lateinit var wm: WindowManager
+              private var controlPanel: LinearLayout? = null
+              private var frozenImageView: ImageView? = null
+              private var isHidden = false
+
+              private val handler = Handler(Looper.getMainLooper())
+              private val mainExecutor = Executor { command -> handler.post(command) }
+
+              override fun onServiceConnected() {
+                  super.onServiceConnected()
+                  wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                  setupViews()
+              }
+
+              private fun setupViews() {
+                  frozenImageView = ImageView(this).apply {
+                      scaleType = ImageView.ScaleType.FIT_XY
+                      visibility = View.GONE
+                  }
+
+                  val imageParams = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.MATCH_PARENT,
+                      WindowManager.LayoutParams.MATCH_PARENT,
+                      WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                      WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                      PixelFormat.TRANSLUCENT
+                  ).apply {
+                      layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                  }
+                  wm.addView(frozenImageView, imageParams)
+
+                  controlPanel = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor("#99000000"))
+                          cornerRadius = 30f
+                      }
+                      setPadding(20, 20, 20, 20)
+                  }
+
+                  val btnCapture = TextView(this).apply {
+                      text = "📸 گرتن"
+                      textSize = 18f
+                      setTextColor(Color.WHITE)
+                      setPadding(20, 10, 20, 10)
+                      setOnClickListener { captureScreen() }
+                  }
+
+                  val btnToggle = TextView(this).apply {
+                      text = "👁️ لادان"
+                      textSize = 18f
+                      setTextColor(Color.WHITE)
+                      setPadding(20, 10, 20, 10)
+                      setOnClickListener { toggleVisibility() }
+                  }
+
+                  controlPanel?.addView(btnToggle)
+                  controlPanel?.addView(btnCapture)
+
+                  val panelParams = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                      PixelFormat.TRANSLUCENT
+                  ).apply {
+                      gravity = Gravity.TOP or Gravity.START
+                      x = 100
+                      y = 300
+                  }
+
+                  controlPanel?.setOnTouchListener(object : View.OnTouchListener {
+                      var initialX = 0
+                      var initialY = 0
+                      var initialTouchX = 0f
+                      var initialTouchY = 0f
+
+                      override fun onTouch(v: View, event: MotionEvent): Boolean {
+                          when (event.action) {
+                              MotionEvent.ACTION_DOWN -> {
+                                  initialX = panelParams.x
+                                  initialY = panelParams.y
+                                  initialTouchX = event.rawX
+                                  initialTouchY = event.rawY
+                                  return false
+                              }
+                              MotionEvent.ACTION_MOVE -> {
+                                  val dx = (event.rawX - initialTouchX).toInt()
+                                  val dy = (event.rawY - initialTouchY).toInt()
+                                  if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+                                      panelParams.x = initialX + dx
+                                      panelParams.y = initialY + dy
+                                      wm.updateViewLayout(v, panelParams)
+                                      return true
+                                  }
+                              }
+                          }
+                          return false
+                      }
+                  })
+
+                  wm.addView(controlPanel, panelParams)
+              }
+
+              private fun captureScreen() {
+                  frozenImageView?.visibility = View.GONE
+
+                  handler.postDelayed({
+                      takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                          override fun onSuccess(result: ScreenshotResult) {
+                              try {
+                                  val hb: HardwareBuffer = result.hardwareBuffer
+                                  val cs: ColorSpace? = result.colorSpace
+                                  val hwBitmap = if (cs != null) {
+                                      Bitmap.wrapHardwareBuffer(hb, cs)
+                                  } else {
+                                      Bitmap.wrapHardwareBuffer(hb, ColorSpace.get(ColorSpace.Named.SRGB))
+                                  }
+
+                                  if (hwBitmap != null) {
+                                      val bitmap = hwBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                                      hwBitmap.recycle()
+
+                                      frozenImageView?.setImageBitmap(bitmap)
+                                      frozenImageView?.visibility = View.VISIBLE
+                                      isHidden = false
+
+                                      Toast.makeText(this@FreezeService, "شاشەکە سڕکرا", Toast.LENGTH_SHORT).show()
+                                  }
+                                  hb.close()
+                              } catch (e: Exception) {
+                                  e.printStackTrace()
+                              }
+                          }
+
+                          override fun onFailure(errorCode: Int) {
+                              Toast.makeText(this@FreezeService, "هەڵە هەیە لە گرتنی وێنەکە", Toast.LENGTH_SHORT).show()
+                          }
+                      })
+                  }, 150)
+              }
+
+              private fun toggleVisibility() {
+                  if (frozenImageView?.drawable == null) {
+                      Toast.makeText(this, "سەرەتا بە دوگمەی 📸 وێنەیەک بگرە", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+
+                  if (isHidden) {
+                      frozenImageView?.visibility = View.VISIBLE
+                      isHidden = false
+                  } else {
+                      frozenImageView?.visibility = View.GONE
+                      isHidden = true
+                  }
+              }
+
+              override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+              override fun onInterrupt() {}
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  controlPanel?.let { try { wm.removeView(it) } catch(e: Exception){} }
+                  frozenImageView?.let { try { wm.removeView(it) } catch(e: Exception){} }
+              }
+          }
+          EOF
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hastyar-Freeze-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
